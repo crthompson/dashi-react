@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend
 COPY backend/main.py .
+COPY backend/config.py .
 
 # Copy built frontend to static directory
 RUN mkdir -p /app/static
