@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-surface: #12121a;
+    --bg-card: #1a1a25;
+    --border-color: #2a2a3a;
+    --border-hover: #3a3a50;
+    --text-primary: #ffffff;
+    --text-secondary: #a1a1aa;
+    --text-muted: #6b7280;
+  }
+
+  * {
+    @apply scrollbar-thin;
+  }
+
+  body {
+    @apply bg-dashi-bg text-white antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-dashi-card/80 backdrop-blur-xl border border-dashi-border rounded-2xl;
+    box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.3);
+  }
+
+  .glass-card:hover {
+    @apply border-dashi-border-hover;
+    box-shadow: 0 8px 32px -1px rgba(0, 0, 0, 0.4);
+  }
+
+  .gradient-border {
+    position: relative;
+    background: var(--bg-card);
+    border-radius: 16px;
+  }
+
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.5), rgba(78, 205, 196, 0.3));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .btn-primary {
+    @apply px-6 py-2.5 rounded-xl font-medium text-white transition-all duration-200;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    box-shadow: 0 4px 15px -3px rgba(102, 126, 234, 0.4);
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 25px -3px rgba(102, 126, 234, 0.5);
+  }
+
+  .btn-secondary {
+    @apply px-6 py-2.5 rounded-xl font-medium text-white bg-dashi-surface border border-dashi-border transition-all duration-200;
+  }
+
+  .btn-secondary:hover {
+    @apply border-dashi-border-hover bg-dashi-card;
+  }
+
+  .input-field {
+    @apply w-full bg-dashi-surface border border-dashi-border rounded-xl px-4 py-3 text-white placeholder-dashi-muted focus:outline-none focus:border-dashi-primary/50 transition-colors;
+  }
+
+  .nav-item {
+    @apply px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200;
+  }
+
+  .nav-item-active {
+    @apply bg-dashi-primary/10 text-dashi-primary;
+  }
+
+  .nav-item-inactive {
+    @apply text-dashi-muted hover:text-white hover:bg-white/5;
+  }
+
+  .stat-card {
+    @apply glass-card p-6;
+  }
+
+  .page-header {
+    @apply flex items-center justify-between mb-8;
+  }
+
+  .page-title {
+    @apply text-3xl font-bold text-white;
+  }
+
+  .page-subtitle {
+    @apply text-dashi-muted mt-1;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a50 transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #3a3a50;
+    border-radius: 3px;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #667eea 0%, #4ecdc4 100%);
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
