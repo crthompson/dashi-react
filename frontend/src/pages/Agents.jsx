@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePolling } from '../hooks/usePolling';
 import { api } from '../api';
 import AgentCard from '../components/AgentCard';
@@ -66,6 +66,11 @@ export default function Agents() {
     const skills = value.split(',').map(s => s.trim()).filter(Boolean);
     setEditForm({ ...editForm, assigned_skills: skills });
   };
+
+  useEffect(() => {
+    handleSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading && !agents) return (
     <div className="flex items-center justify-center h-[calc(100vh-4rem)]">

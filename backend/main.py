@@ -139,6 +139,91 @@ def get_db():
     finally:
         db.close()
 
+
+def load_agents_from_openclaw() -> list:
+    """Best-effort fetch of OpenClaw agents list."""
+    try:
+        result = subprocess.run(
+            ["openclaw", "agents", "list", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return []
+        parsed = json.loads(result.stdout)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and isinstance(parsed.get("agents"), list):
+            return parsed["agents"]
+        return []
+    except Exception:
+        return []
+
+
+def sync_agents_from_cli(db: Session, prune_missing: bool = True):
+    """Sync DB agents from OpenClaw CLI output.
+
+    Returns: (added, updated, removed, total_cli)
+    """
+    cli_agents = load_agents_from_openclaw()
+    if not cli_agents:
+        return 0, 0, 0, 0
+
+    added = 0
+    updated = 0
+    removed = 0
+
+    cli_ids = set()
+
+    for cli_agent in cli_agents:
+        agent_id = cli_agent.get("id") or cli_agent.get("agentId")
+        if not agent_id:
+            continue
+
+        cli_ids.add(agent_id)
+        cli_default = bool(cli_agent.get("isDefault") or cli_agent.get("is_default"))
+
+        existing = db.query(Agent).filter(Agent.id == agent_id).first()
+        if existing:
+            existing.name = cli_agent.get("name") or existing.name or agent_id
+            existing.model = cli_agent.get("model") or existing.model
+            existing.workspace = cli_agent.get("workspace") or existing.workspace
+            existing.assigned_skills = cli_agent.get("skills") or existing.assigned_skills or []
+            existing.is_default = cli_default
+            existing.updated_at = datetime.utcnow()
+            updated += 1
+        else:
+            db.add(Agent(
+                id=agent_id,
+                name=cli_agent.get("name") or agent_id,
+                model=cli_agent.get("model") or "",
+                workspace=cli_agent.get("workspace") or "",
+                description="",
+                is_default=cli_default,
+                assigned_skills=cli_agent.get("skills") or [],
+            ))
+            added += 1
+
+    if prune_missing:
+        existing_ids = {a.id for a in db.query(Agent).all()}
+        stale_ids = existing_ids - cli_ids
+        if stale_ids:
+            removed = db.query(Agent).filter(Agent.id.in_(list(stale_ids))).delete(synchronize_session=False)
+
+    # Ensure exactly one default if possible
+    defaults = db.query(Agent).filter(Agent.is_default == True).all()
+    if len(defaults) == 0 and cli_ids:
+        first = db.query(Agent).filter(Agent.id.in_(list(cli_ids))).first()
+        if first:
+            first.is_default = True
+    elif len(defaults) > 1:
+        keep = defaults[0].id
+        db.query(Agent).filter(Agent.is_default == True, Agent.id != keep).update({"is_default": False}, synchronize_session=False)
+
+    db.commit()
+    return added, updated, removed, len(cli_ids)
+
 # --- Background Task: Poll Spend Data ---
 async def poll_spend_data_once():
     """Poll spend APIs once and store results.
@@ -223,25 +308,19 @@ async def lifespan(app: FastAPI):
                 db.add(p)
             db.commit()
         
-        if db.query(Agent).count() == 0:
-            sample_agents = [
-                Agent(id="main", name="Main Agent", model="kimi-k2.5", 
-                     description="General purpose assistant", is_default=True),
-                Agent(id="opus", name="Opus", model="claude-opus-4",
-                     description="Deep reasoning and architecture tasks"),
-                Agent(id="qwen", name="Qwen Coder", model="qwen2.5-coder:7b",
-                     description="Local coding assistant"),
-                Agent(id="gemini", name="Gemini", model="gemini-3.1",
-                     description="Google Gemini 3.1 for advanced reasoning"),
-            ]
-            for a in sample_agents:
-                db.add(a)
-            db.commit()
-        
-        # Ensure Gemini exists (for existing databases)
-        if not db.query(Agent).filter(Agent.id == "gemini").first():
-            db.add(Agent(id="gemini", name="Gemini", model="gemini-3.1",
-                        description="Google Gemini 3.1 for advanced reasoning"))
+        # Prefer real OpenClaw agents if available
+        added, updated, removed, total_cli = sync_agents_from_cli(db, prune_missing=True)
+
+        # Fallback: keep a single sane default agent if OpenClaw CLI is unavailable
+        if total_cli == 0 and db.query(Agent).count() == 0:
+            db.add(Agent(
+                id="main",
+                name="Main",
+                model="openai-codex/gpt-5.3-codex",
+                description="Primary assistant",
+                is_default=True,
+                assigned_skills=[],
+            ))
             db.commit()
     finally:
         db.close()
@@ -266,7 +345,7 @@ app.add_middleware(
 # --- Agent Routes ---
 @app.get("/api/agents", response_model=List[AgentSchema])
 def list_agents(db: Session = Depends(get_db), api_key: str = Depends(verify_api_key)):
-    agents = db.query(Agent).all()
+    agents = db.query(Agent).order_by(Agent.is_default.desc(), Agent.name.asc()).all()
     return agents
 
 @app.get("/api/agents/{agent_id}", response_model=AgentSchema)
@@ -304,6 +383,10 @@ async def update_agent(agent_id: str, data: AgentSchema, db: Session = Depends(g
     # Check if setting as default
     setting_default = data.is_default and not agent.is_default
     
+    # Keep only one default agent
+    if data.is_default:
+        db.query(Agent).filter(Agent.id != agent_id, Agent.is_default == True).update({"is_default": False}, synchronize_session=False)
+
     # Update fields
     agent.name = data.name
     agent.model = data.model
@@ -324,74 +407,27 @@ async def update_agent(agent_id: str, data: AgentSchema, db: Session = Depends(g
 
 @app.post("/api/agents/sync")
 def sync_agents(db: Session = Depends(get_db), api_key: str = Depends(verify_api_key)):
-    """Sync agents from OpenClaw CLI."""
+    """Sync agents from OpenClaw CLI and prune stale entries."""
     try:
-        # Run openclaw CLI to get agents list
-        result = subprocess.run(
-            ["openclaw", "agents", "list", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        if result.returncode != 0:
-            return {"message": f"OpenClaw CLI error: {result.stderr}", "added": 0, "updated": 0}
-        
-        # Parse JSON output
-        try:
-            cli_agents = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return {"message": "Invalid JSON from OpenClaw CLI", "added": 0, "updated": 0}
-        
-        if not isinstance(cli_agents, list):
-            return {"message": "Unexpected format from OpenClaw CLI", "added": 0, "updated": 0}
-        
-        added = 0
-        updated = 0
-        
-        for cli_agent in cli_agents:
-            agent_id = cli_agent.get("id") or cli_agent.get("agentId")
-            if not agent_id:
-                continue
-            
-            # Check if agent exists
-            existing = db.query(Agent).filter(Agent.id == agent_id).first()
-            
-            if existing:
-                # Update existing (preserve description and is_default)
-                existing.name = cli_agent.get("name", existing.name)
-                existing.model = cli_agent.get("model", existing.model)
-                existing.workspace = cli_agent.get("workspace", existing.workspace)
-                existing.assigned_skills = cli_agent.get("skills", existing.assigned_skills)
-                existing.updated_at = datetime.utcnow()
-                updated += 1
-            else:
-                # Create new agent
-                new_agent = Agent(
-                    id=agent_id,
-                    name=cli_agent.get("name", agent_id),
-                    model=cli_agent.get("model", ""),
-                    workspace=cli_agent.get("workspace", ""),
-                    description="",
-                    is_default=False,
-                    assigned_skills=cli_agent.get("skills", [])
-                )
-                db.add(new_agent)
-                added += 1
-        
-        db.commit()
+        added, updated, removed, total_cli = sync_agents_from_cli(db, prune_missing=True)
+        if total_cli == 0:
+            return {
+                "message": "OpenClaw CLI unavailable or returned no agents",
+                "added": 0,
+                "updated": 0,
+                "removed": 0,
+                "total": 0,
+            }
+
         return {
-            "message": f"Synced {len(cli_agents)} agents: {added} added, {updated} updated",
+            "message": f"Synced {total_cli} agents: {added} added, {updated} updated, {removed} removed",
             "added": added,
-            "updated": updated
+            "updated": updated,
+            "removed": removed,
+            "total": total_cli,
         }
-        
-    except subprocess.TimeoutExpired:
-        return {"message": "OpenClaw CLI timed out", "added": 0, "updated": 0}
-    except FileNotFoundError:
-        return {"message": "OpenClaw CLI not found in PATH", "added": 0, "updated": 0}
     except Exception as e:
-        return {"message": f"Sync error: {str(e)}", "added": 0, "updated": 0}
+        return {"message": f"Sync error: {str(e)}", "added": 0, "updated": 0, "removed": 0, "total": 0}
 
 # --- Chat Routes ---
 @app.get("/api/chat/history")

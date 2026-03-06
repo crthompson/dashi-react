@@ -12,7 +12,14 @@ export default function Chat() {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    api.getAgents().then(setAgents).catch(console.error);
+    api.getAgents()
+      .then((agentList) => {
+        setAgents(agentList);
+        if (!agentList?.length) return;
+        const defaultAgent = agentList.find(a => a.is_default) || agentList[0];
+        setSelectedAgent(defaultAgent.id);
+      })
+      .catch(console.error);
   }, []);
 
   useEffect(() => {
